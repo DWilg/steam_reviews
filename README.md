@@ -34,7 +34,7 @@ steam_reviews/
 ```
 
 ## 5. Wymagania wstępne
-- Python w wersji co najmniej 3.9.
+- Python w wersji co najmniej 3.9., ale nie wyżej niż 3.11, 3.12 jest nie wspierane przez PySpark.
 - Zainstalowane środowisko Java (JDK 8+), wymagane do działania Spark.
 
 ## 6. Instalacja środowiska
