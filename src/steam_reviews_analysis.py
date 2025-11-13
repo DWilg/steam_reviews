@@ -2,7 +2,7 @@ import os
 import time
 import sys
 from typing import Tuple
-
+from wordcloud import WordCloud
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
@@ -105,6 +105,48 @@ def eda(df: DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             score_distribution_df.toPandas(),
             app_avg_df.toPandas())
 
+@timed("Extended EDA (length, word frequencies, timestamps)")
+def extended_eda(df: DataFrame, output_dir: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    os.makedirs(output_dir, exist_ok=True)
+
+    df_len = df.withColumn("review_length", F.length(F.col("review_text")))
+    length_pd = df_len.select("review_length").toPandas()
+    length_pd.to_csv(os.path.join(output_dir, "review_lengths.csv"), index=False)
+
+    df_words = df.withColumn("word", F.explode(F.split(F.col("review_text"), "\s+")))
+    word_counts_df = (df_words.groupBy("word")
+                      .agg(F.count("*").alias("count"))
+                      .orderBy(F.col("count").desc()))
+    word_counts_pd = word_counts_df.toPandas()
+    word_counts_pd.to_csv(os.path.join(output_dir, "word_counts.csv"), index=False)
+
+    if "timestamp_created" in df.columns:
+        df_time = (df
+                   .withColumn("year", F.year("timestamp_created"))
+                   .withColumn("month", F.month("timestamp_created")))
+    else:
+        df_time = df.withColumn("year", F.lit(None)).withColumn("month", F.lit(None))
+
+    year_pd = (df_time.groupBy("year")
+               .agg(F.count("*").alias("review_count"))
+               .orderBy("year")
+               .toPandas())
+    year_pd.to_csv(os.path.join(output_dir, "reviews_per_year.csv"), index=False)
+
+    month_pd = (df_time.groupBy("year", "month")
+                .agg(F.count("*").alias("review_count"))
+                .orderBy("year", "month")
+                .toPandas())
+    month_pd.to_csv(os.path.join(output_dir, "reviews_per_month.csv"), index=False)
+    text_pd = df.select("review_text").toPandas()
+    all_text = " ".join(text_pd["review_text"].astype(str).tolist())
+
+    with open(os.path.join(output_dir, "all_reviews_text.txt"), "w", encoding="utf-8") as f:
+        f.write(all_text)
+
+    return length_pd, word_counts_pd, year_pd, month_pd, all_text
+
+
 @timed("Generate Visualizations")
 def generate_visualizations(top_games_pd: pd.DataFrame,
                             score_distribution_pd: pd.DataFrame,
@@ -141,6 +183,52 @@ def generate_visualizations(top_games_pd: pd.DataFrame,
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "average_review_score_top.png"))
     plt.close()
+
+@timed("Generate Extended Visualizations")
+def generate_extended_visualizations(length_pd, word_counts_pd, year_pd, month_pd, all_text, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    sns.set(style="whitegrid")
+
+    plt.figure(figsize=(10, 5))
+    sns.histplot(length_pd["review_length"], bins=50, kde=True)
+    plt.title("Histogram of Review Lengths")
+    plt.xlabel("Review length (characters)")
+    plt.ylabel("Frequency")
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "review_length_histogram.png"))
+    plt.close()
+
+    if "year" in year_pd.columns:
+        plt.figure(figsize=(10, 5))
+        sns.lineplot(data=year_pd, x="year", y="review_count", marker="o")
+        plt.title("Number of Reviews per Year")
+        plt.xlabel("Year")
+        plt.ylabel("Number of Reviews")
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, "reviews_per_year.png"))
+        plt.close()
+
+    if {"year", "month"}.issubset(month_pd.columns):
+        plt.figure(figsize=(12, 5))
+        sns.lineplot(data=month_pd, x="month", y="review_count", hue="year")
+        plt.title("Reviews per Month (Grouped by Year)")
+        plt.xlabel("Month")
+        plt.ylabel("Review Count")
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, "reviews_per_month.png"))
+        plt.close()
+
+    try:
+        wc = WordCloud(width=1600, height=800, background_color="white").generate(all_text)
+        plt.figure(figsize=(14, 7))
+        plt.imshow(wc, interpolation="bilinear")
+        plt.axis("off")
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, "wordcloud.png"))
+        plt.close()
+        print("[INFO] WordCloud generated successfully.")
+    except Exception as e:
+        print(f"[WARN] WordCloud generation failed: {e}")
 
 @timed("Save Output Data")
 def save_outputs(output_dir: str,
@@ -199,7 +287,15 @@ def main(dataset_path: str = None):
     df_review_counts, df_avg_scores, df_sentiment = dataframe_aggregations(cleaned_df)
 
     top_games_pd, score_distribution_pd, app_avg_pd = eda(cleaned_df)
+    length_pd, word_counts_pd, year_pd, month_pd, all_text = extended_eda(
+        cleaned_df,
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), OUTPUT_DIR)
+    )
 
+    generate_extended_visualizations(
+        length_pd, word_counts_pd, year_pd, month_pd, all_text,
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), OUTPUT_DIR)
+    )
     generate_visualizations(top_games_pd, score_distribution_pd, app_avg_pd, os.path.join(os.path.dirname(os.path.dirname(__file__)), OUTPUT_DIR))
 
     save_outputs(os.path.join(os.path.dirname(os.path.dirname(__file__)), OUTPUT_DIR),
