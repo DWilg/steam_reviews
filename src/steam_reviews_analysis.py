@@ -33,7 +33,8 @@ def init_spark(app_name: str = "SteamReviewsAnalysis") -> SparkSession:
             .appName(app_name)
             .config("spark.pyspark.driver.python", sys.executable)
             .config("spark.pyspark.python", sys.executable)
-            .config("spark.driver.memory", "6g")
+            .config("spark.driver.memory", "8g")
+            .config("spark.driver.maxResultSize", "2g")
             .config("spark.executor.memory", "6g")
             .config("spark.sql.shuffle.partitions", "48")
             .config("spark.memory.fraction", "0.6")
@@ -143,7 +144,7 @@ def extended_eda(df: DataFrame, output_dir: str) -> Tuple[pd.DataFrame, pd.DataF
     length_pd = df_len.select("review_length").toPandas()
     length_pd.to_csv(os.path.join(output_dir, "review_lengths.csv"), index=False)
 
-    df_words = df.withColumn("word", F.explode(F.split(F.col("review_text"), "\s+")))
+    df_words = df.withColumn("word", F.explode(F.split(F.col("review_text"), r"\s+")))
     word_counts_df = (df_words.groupBy("word")
                       .agg(F.count("*").alias("count"))
                       .orderBy(F.col("count").desc()))
@@ -168,7 +169,8 @@ def extended_eda(df: DataFrame, output_dir: str) -> Tuple[pd.DataFrame, pd.DataF
                 .orderBy("year", "month")
                 .toPandas())
     month_pd.to_csv(os.path.join(output_dir, "reviews_per_month.csv"), index=False)
-    text_pd = df.select("review_text").toPandas()
+    df_sampled_for_text = df.sample(False, 0.1, seed=42)
+    text_pd = df_sampled_for_text.select("review_text").toPandas()
     all_text = " ".join(text_pd["review_text"].astype(str).tolist())
 
     with open(os.path.join(output_dir, "all_reviews_text.txt"), "w", encoding="utf-8") as f:
@@ -271,9 +273,9 @@ def save_outputs(output_dir: str,
     rdd_avg_pd.to_csv(os.path.join(output_dir, "rdd_avg_scores.csv"), index=False)
     rdd_sentiment_pd.to_csv(os.path.join(output_dir, "rdd_sentiment_counts.csv"), index=False)
 
-    df_counts.coalesce(1).write.mode("overwrite").option("header", True).csv(os.path.join(output_dir, "df_review_counts"))
-    df_avg.coalesce(1).write.mode("overwrite").option("header", True).csv(os.path.join(output_dir, "df_avg_scores"))
-    df_sentiment.coalesce(1).write.mode("overwrite").option("header", True).csv(os.path.join(output_dir, "df_sentiment_counts"))
+    df_counts.toPandas().to_csv(os.path.join(output_dir, "df_review_counts.csv"), index=False)
+    df_avg.toPandas().to_csv(os.path.join(output_dir, "df_avg_scores.csv"), index=False)
+    df_sentiment.toPandas().to_csv(os.path.join(output_dir, "df_sentiment_counts.csv"), index=False)
 
     top_games_pd.to_csv(os.path.join(output_dir, "top_games.csv"), index=False)
     score_distribution_pd.to_csv(os.path.join(output_dir, "score_distribution.csv"), index=False)
